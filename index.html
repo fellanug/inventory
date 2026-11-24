@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Monitoring Stok Spare Part</title>
+<style>
+:root{--bg:#f6f7f9;--sf:#fff;--tx:#1d2330;--mu:#6b7385;--bd:#dfe3ea;--ac:#1f5fd6;--ok:#12805c;--wr:#b45309;--er:#c0392b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171d;--sf:#1c2029;--tx:#e8eaf0;--mu:#97a0b3;--bd:#2c3240;--ac:#6ea1ff;--ok:#4fd1a1;--wr:#f0b35a;--er:#ff8a7a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14171d;--sf:#1c2029;--tx:#e8eaf0;--mu:#97a0b3;--bd:#2c3240;--ac:#6ea1ff;--ok:#4fd1a1;--wr:#f0b35a;--er:#ff8a7a;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 12px}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+button,input,select,textarea{font:inherit;color:var(--tx);background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+button{cursor:pointer}
+button.pri,nav button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:14px}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.kpi div{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:10px 12px}
+.kpi b{display:block;font-size:20px}.kpi span{color:var(--mu);font-size:12px}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:640px}
+th,td{padding:7px 9px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+th{color:var(--mu);font-weight:600;font-size:12px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.row{cursor:pointer}tr.row:hover{background:var(--bg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+label{display:block;font-size:12px;color:var(--mu);margin-bottom:3px}
+label+*{width:100%}
+.tag{padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid var(--bd)}
+.t-masuk,.t-return{color:var(--ok)}.t-keluar{color:var(--er)}.t-order{color:var(--wr)}
+.msg{color:var(--mu);margin:8px 0}.err{color:var(--er)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.bar input{flex:1;min-width:180px}
+.low{color:var(--er);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<h1>📦 Monitoring Stok Spare Part</h1>
+<nav id="nav"></nav>
+<div id="v"></div>
+</main>
+<script>
+const TIPE={order:'Sedang Order',masuk:'Stok Masuk',keluar:'Stok Keluar',return:'Stok Return'};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Number(n||0).toLocaleString('id-ID');
+const idOf=k=>String(k).trim().replace(/[^A-Za-z0-9_.\-]/g,'_');
+const today=()=>new Date().toISOString().slice(0,10);
+let db=null,items=[],moves=[],tab='stok',q='',page=0,sel=null,mq='',msg='',ready=false,pend=false;
+const PS=100;
+
+function calc(){
+  const m=new Map();
+  items.forEach(i=>m.set(i.kode,{...i,awal:Number(i.stokAwal)||0,masuk:0,keluar:0,ret:0,ord:0,ordMasuk:0}));
+  moves.forEach(x=>{const r=m.get(x.kode);if(!r)return;const n=Number(x.qty)||0;
+    if(x.tipe==='masuk'){r.masuk+=n;if(x.refPO)r.ordMasuk+=n}
+    else if(x.tipe==='keluar')r.keluar+=n;else if(x.tipe==='return')r.ret+=n;else if(x.tipe==='order')r.ord+=n});
+  m.forEach(r=>{r.akhir=r.awal+r.masuk+r.ret-r.keluar;r.sedang=Math.max(0,r.ord-r.ordMasuk)});
+  return m;
+}
+function render(){
+  if(pend)return;pend=true;requestAnimationFrame(()=>{pend=false;draw()});
+}
+function draw(){
+  const nav=document.getElementById('nav');
+  nav.innerHTML=[['stok','Ringkasan Stok'],['input','Input Transaksi'],['riwayat','Riwayat Dokumen'],['data','Data Barang']]
+   .map(([k,l])=>`<button data-t="${k}" class="${tab===k?'on':''}">${l}</button>`).join('');
+  nav.onclick=e=>{const t=e.target.dataset.t;if(t){tab=t;msg='';page=0;draw()}};
+  const v=document.getElementById('v');
+  if(!db){v.innerHTML='<div class="card err">Penyimpanan data bersama tidak tersedia. Pastikan Anda sudah login ke claude.ai dan membuka halaman ini lewat link artifact.</div>';return}
+  if(!ready){v.innerHTML='<div class="card msg">Memuat data…</div>';return}
+  ({stok:vStok,input:vInput,riwayat:vRiwayat,data:vData})[tab](v);
+}
+function vStok(v){
+  const m=calc(),all=[...m.values()];
+  const s=q.toLowerCase();
+  const f=s?all.filter(r=>(r.kode+' '+(r.nama||'')+' '+(r.lokasi||'')).toLowerCase().includes(s)):all;
+  const pages=Math.max(1,Math.ceil(f.length/PS));if(page>=pages)page=pages-1;
+  const rows=f.slice(page*PS,page*PS+PS);
+  const tot=k=>all.reduce((a,r)=>a+r[k],0);
+  let h=`<div class="kpi"><div><b>${fmt(all.length)}</b><span>Line item</span></div><div><b>${fmt(tot('sedang'))}</b><span>Sedang order</span></div><div><b>${fmt(tot('masuk'))}</b><span>Total masuk</span></div><div><b>${fmt(tot('keluar'))}</b><span>Total keluar</span></div><div><b>${fmt(tot('akhir'))}</b><span>Stok akhir</span></div></div>`;
+  h+=`<div class="card"><div class="bar"><input id="q" placeholder="Cari kode / nama / lokasi…" value="${esc(q)}"></div><div class="wrap"><table><thead><tr><th>Kode</th><th>Nama</th><th>Lokasi</th><th>Sat.</th><th class="n">Sedang Order</th><th class="n">Stok Awal</th><th class="n">Masuk</th><th class="n">Return</th><th class="n">Keluar</th><th class="n">Stok Akhir</th></tr></thead><tbody>`;
+  h+=rows.map(r=>`<tr class="row" data-k="${esc(r.kode)}"><td>${esc(r.kode)}</td><td>${esc(r.nama)}</td><td>${esc(r.lokasi)}</td><td>${esc(r.satuan)}</td><td class="n">${fmt(r.sedang)}</td><td class="n">${fmt(r.awal)}</td><td class="n">${fmt(r.masuk)}</td><td class="n">${fmt(r.ret)}</td><td class="n">${fmt(r.keluar)}</td><td class="n ${r.akhir<=0?'low':''}"><b>${fmt(r.akhir)}</b></td></tr>`).join('')||'<tr><td colspan="10" class="msg">Belum ada barang. Tambahkan lewat tab Data Barang.</td></tr>';
+  h+=`</tbody></table></div><div class="bar" style="margin-top:10px"><button id="pv" ${page?'':'disabled'}>‹</button><span>Hal ${page+1} / ${pages} · ${fmt(f.length)} item</span><button id="nx" ${page<pages-1?'':'disabled'}>›</button></div></div>`;
+  if(sel&&m.get(sel)){const r=m.get(sel);
+    const hm=moves.filter(x=>x.kode===sel).sort((a,b)=>(b.tgl||'').localeCompare(a.tgl||''));
+    h+=`<div class="card"><b>${esc(r.kode)} — ${esc(r.nama)}</b> <span class="tag">📍 ${esc(r.lokasi||'-')}</span><div class="msg">Stok akhir = ${fmt(r.awal)} (awal) + ${fmt(r.masuk)} (masuk) + ${fmt(r.ret)} (return) − ${fmt(r.keluar)} (keluar) = <b>${fmt(r.akhir)}</b></div>${movTable(hm,false)}</div>`}
+  v.innerHTML=h;
+  const qi=document.getElementById('q');
+  qi.oninput=e=>{q=e.target.value;page=0;const p=e.target.selectionStart;draw();const n=document.getElementById('q');n.focus();n.setSelectionRange(p,p)};
+  document.getElementById('pv').onclick=()=>{page--;draw()};document.getElementById('nx').onclick=()=>{page++;draw()};
+  v.querySelectorAll('tr.row').forEach(t=>t.onclick=()=>{sel=t.dataset.k;draw();v.lastElementChild.scrollIntoView({behavior:'smooth'})});
+  bindDel(v);
+}
+function movTable(list,showKode=true){
+  if(!list.length)return '<div class="msg">Belum ada pergerakan.</div>';
+  return `<div class="wrap"><table><thead><tr><th>Tanggal</th><th>Jenis</th><th>No. Dokumen</th>${showKode?'<th>Kode</th>':''}<th class="n">Qty</th><th>Ref. PO</th><th>Keterangan</th><th></th></tr></thead><tbody>`+
+  list.slice(0,300).map(x=>`<tr><td>${esc(x.tgl)}</td><td><span class="tag t-${x.tipe}">${TIPE[x.tipe]||esc(x.tipe)}</span></td><td>${esc(x.noDok)}</td>${showKode?`<td>${esc(x.kode)}</td>`:''}<td class="n">${fmt(x.qty)}</td><td>${esc(x.refPO)}</td><td>${esc(x.ket)}</td><td><button data-del="${esc(x.id)}">Hapus</button></td></tr>`).join('')+'</tbody></table></div>'+(list.length>300?'<div class="msg">Menampilkan 300 teratas. Gunakan pencarian untuk mempersempit.</div>':'');
+}
+function bindDel(v){
+  v.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    if(b.dataset.s!=='1'){b.dataset.s='1';b.textContent='Yakin?';return}
+    try{await db.collection('moves').doc(b.dataset.del).delete()}catch(e){alert('Gagal menghapus: '+(e.message||e.code))}});
+}
+function vInput(v){
+  v.innerHTML=`<div class="card"><b>Input pergerakan stok</b><p class="msg">Setiap transaksi wajib memakai nomor dokumen (PO, surat jalan, DO, nota return, dsb.).</p>
+  <div class="grid">
+  <div><label>Jenis</label><select id="f-t">${Object.entries(TIPE).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select></div>
+  <div><label>Kode barang</label><input id="f-k" list="dl" autocomplete="off"><datalist id="dl"></datalist><div class="msg" id="lk"></div></div>
+  <div><label>Qty</label><input id="f-q" type="number" min="1" inputmode="numeric"></div>
+  <div><label>No. Dokumen</label><input id="f-d"></div>
+  <div><label>Tanggal</label><input id="f-g" type="date" value="${today()}"></div>
+  <div id="po"><label>Ref. No. PO (opsional, untuk stok masuk)</label><input id="f-p"></div>
+  <div><label>Keterangan</label><input id="f-n"></div></div>
+  <div class="bar" style="margin-top:12px"><button class="pri" id="sv">Simpan</button><span id="fm" class="msg">${esc(msg)}</span></div></div>`;
+  const dl=document.getElementById('dl'),ki=document.getElementById('f-k');
+  const fill=()=>{const s=ki.value.toLowerCase();if(s.length<2){dl.innerHTML='';return}
+    dl.innerHTML=items.filter(i=>(i.kode+' '+(i.nama||'')).toLowerCase().includes(s)).slice(0,30).map(i=>`<option value="${esc(i.kode)}">${esc(i.nama)} · ${esc(i.lokasi)}</option>`).join('')};
+  ki.oninput=()=>{fill();const it=items.find(i=>i.kode===ki.value.trim());document.getElementById('lk').textContent=it?('📍 Lokasi: '+(it.lokasi||'-')+' · '+(it.nama||'')):''};
+  document.getElementById('sv').onclick=async()=>{
+    const g=id=>document.getElementById(id).value.trim();
+    const fm=document.getElementById('fm');fm.className='msg err';
+    const kode=g('f-k'),qty=Number(g('f-q')),noDok=g('f-d');
+    if(!items.find(i=>i.kode===kode)){fm.textContent='Kode barang tidak ditemukan.';return}
+    if(!(qty>0)){fm.textContent='Qty harus lebih dari 0.';return}
+    if(!noDok){fm.textContent='No. dokumen wajib diisi.';return}
+    const tipe=g('f-t');
+    try{await db.collection('moves').add({kode,tipe,qty,noDok,tgl:g('f-g')||today(),refPO:tipe==='masuk'?g('f-p'):'',ket:g('f-n'),at:Date.now()});
+      msg='✓ Tersimpan: '+TIPE[tipe]+' '+kode+' ('+qty+') dok '+noDok;draw()}
+    catch(e){fm.textContent='Gagal menyimpan: '+(e.message||e.code||e)}};
+}
+function vRiwayat(v){
+  const s=mq.toLowerCase();
+  const f=moves.filter(x=>!s||(x.noDok+' '+x.kode+' '+(x.refPO||'')+' '+x.tipe).toLowerCase().includes(s)).sort((a,b)=>(b.tgl||'').localeCompare(a.tgl||'')||(b.at||0)-(a.at||0));
+  v.innerHTML=`<div class="card"><div class="bar"><input id="mq" placeholder="Cari no. dokumen / kode / jenis (order, masuk, keluar, return)…" value="${esc(mq)}"></div>${movTable(f)}</div>`;
+  document.getElementById('mq').oninput=e=>{mq=e.target.value;const p=e.target.selectionStart;draw();const n=document.getElementById('mq');n.focus();n.setSelectionRange(p,p)};
+  bindDel(v);
+}
+function vData(v){
+  v.innerHTML=`<div class="card"><b>Tambah satu barang</b><div class="grid" style="margin-top:8px"><div><label>Kode</label><input id="a-k"></div><div><label>Nama</label><input id="a-n"></div><div><label>Kode lokasi</label><input id="a-l"></div><div><label>Satuan</label><input id="a-s" value="pcs"></div><div><label>Stok awal</label><input id="a-a" type="number" value="0"></div></div><div class="bar" style="margin-top:10px"><button class="pri" id="a-b">Tambah / Perbarui</button></div></div>
+  <div class="card"><b>Import 3000 line item sekaligus</b><p class="msg">Tempel dari Excel atau pilih file CSV. Kolom: <code>kode, nama, satuan, stok_awal, lokasi</code> (pemisah koma, titik koma, atau tab). Baris header otomatis diabaikan. Kode yang sudah ada akan diperbarui.</p>
+  <input type="file" id="i-f" accept=".csv,.txt,.tsv"><textarea id="i-t" rows="5" style="width:100%;margin-top:8px" placeholder="SP-0001&#9;Bearing 6204&#9;pcs&#9;25&#9;A-01-02"></textarea>
+  <div class="bar" style="margin-top:10px"><button class="pri" id="i-b">Import</button><span id="i-m" class="msg">${esc(msg)}</span></div></div>
+  <div class="card"><div class="bar"><button id="ex">Unduh ringkasan stok (CSV)</button><span id="ex-m" class="msg"></span></div></div>`;
+  document.getElementById('a-b').onclick=async()=>{
+    const g=id=>document.getElementById(id).value.trim(),kode=g('a-k');if(!kode)return;
+    try{await db.collection('items').doc(idOf(kode)).set({kode,nama:g('a-n'),lokasi:g('a-l'),satuan:g('a-s'),stokAwal:Number(g('a-a'))||0});msg='✓ Barang '+kode+' disimpan';draw()}catch(e){alert('Gagal: '+(e.message||e.code))}};
+  document.getElementById('i-f').onchange=async e=>{const f=e.target.files[0];if(f)document.getElementById('i-t').value=await f.text()};
+  document.getElementById('i-b').onclick=async()=>{
+    const out=document.getElementById('i-m');
+    const rows=document.getElementById('i-t').value.split(/\r?\n/).map(l=>l.split(/\t|;|,/).map(c=>c.trim().replace(/^"|"$/g,''))).filter(r=>r[0]);
+    if(rows.length&&isNaN(Number(rows[0][3]))&&/kode|code|part/i.test(rows[0][0]))rows.shift();
+    if(!rows.length){out.textContent='Tidak ada data.';return}
+    let done=0,fail=0;
+    for(let i=0;i<rows.length;i+=15){
+      await Promise.all(rows.slice(i,i+15).map(r=>db.collection('items').doc(idOf(r[0])).set({kode:r[0],nama:r[1]||'',satuan:r[2]||'pcs',stokAwal:Number((r[3]||'0').replace(/\./g,'').replace(',','.'))||0,lokasi:r[4]||''}).then(()=>done++,()=>fail++)));
+      out.textContent=`Mengimpor… ${done}/${rows.length}`}
+    msg=`✓ Selesai: ${done} barang${fail?`, ${fail} gagal`:''}`;out.textContent=msg};
+  document.getElementById('ex').onclick=async()=>{
+    const em=document.getElementById('ex-m');
+    const csv=['kode,nama,lokasi,satuan,sedang_order,stok_awal,masuk,return,keluar,stok_akhir',...[...calc().values()].map(r=>[r.kode,r.nama,r.lokasi,r.satuan,r.sedang,r.awal,r.masuk,r.ret,r.keluar,r.akhir].map(c=>'"'+String(c??'').replace(/"/g,'""')+'"').join(','))].join('\n');
+    try{const d=await claude.use('downloads');if(!d){em.textContent='Fitur unduh tidak tersedia.';return}
+      await d.save({filename:'stok-'+today()+'.csv',data:csv});em.textContent='✓ File siap'}catch(e){em.textContent='Unduhan dibatalkan.'}};
+}
+(async()=>{
+  draw();
+  try{db=await claude.use('db')}catch(e){db=null}
+  if(!db){draw();return}
+  let a=false,b=false;const chk=()=>{if(a&&b&&!ready){ready=true}render()};
+  const t=setTimeout(()=>{if(!ready){ready=true;render()}},10000);
+  db.collection('items').onSnapshot(s=>{items=s.docs.map(d=>d.data());a=true;clearTimeout(t);chk()},()=>{a=true;chk()});
+  db.collection('moves').onSnapshot(s=>{moves=s.docs.map(d=>({...d.data(),id:d.id}));b=true;chk()},()=>{b=true;chk()});
+})();
+</script>
+</body>
+</html>
